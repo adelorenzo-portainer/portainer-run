@@ -49,12 +49,35 @@ The assistant is scoped to container operations only. It declines unrelated ques
 
 ```
 Browser → Node proxy (server.js) → Portainer API
-                                  → Anthropic API (if configured)
+                                  → Anthropic API   (if ANTHROPIC_API_KEY)
+                                  → OpenAI-compatible API (if OPENAI_API_KEY)
 ```
 
-Portainer Run is a single HTML file served by a small Node.js proxy. The proxy handles three things: it forwards API calls to Portainer (bypassing browser CORS), it relays AI requests to Anthropic (keeping the API key server-side), and it maintains a file-backed session cache keyed by a hash of the user's token.
+Portainer Run is a single HTML file served by a small Node.js proxy. The proxy handles three things: it forwards API calls to Portainer (bypassing browser CORS), it relays AI requests to the configured provider (keeping the API key server-side), and it maintains a file-backed session cache keyed by a hash of the user's token.
 
-The user's credentials never appear in server logs. The Anthropic API key never reaches the browser.
+The user's credentials never appear in server logs. The AI provider key never reaches the browser.
+
+### AI providers
+
+Two providers are supported:
+
+- **Anthropic** — set `ANTHROPIC_API_KEY`. Uses Claude directly.
+- **OpenAI-compatible** — set `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL`. Works with any endpoint that implements the OpenAI `/chat/completions` shape: OpenAI, Azure OpenAI, OpenRouter, Together AI, vLLM, Ollama, LM Studio, etc.
+
+The frontend always speaks the Anthropic message shape. When the OpenAI provider is active, the proxy translates the request into OpenAI `/chat/completions` and translates the streaming response back into Anthropic-style SSE events — the UI is unaware of the swap.
+
+If both keys are set, `AI_PROVIDER=anthropic|openai` picks the winner (defaults to `anthropic`).
+
+Example `OPENAI_BASE_URL` values:
+
+| Provider | Base URL |
+|---|---|
+| OpenAI | `https://api.openai.com/v1` |
+| OpenRouter | `https://openrouter.ai/api/v1` |
+| Together AI | `https://api.together.xyz/v1` |
+| Ollama (local) | `http://host.docker.internal:11434/v1` |
+| vLLM (local) | `http://host.docker.internal:8000/v1` |
+| LM Studio (local) | `http://host.docker.internal:1234/v1` |
 
 The proxy serves HTTPS on port 443 with a self-signed certificate by default. Port 80 redirects to HTTPS. Real certificates can be provided at runtime.
 
@@ -143,7 +166,11 @@ If the container cannot resolve your Portainer hostname (error: `EAI_AGAIN`), ad
 | Variable | Default | Description |
 |---|---|---|
 | `PORTAINER_URL` | — | Full URL of your Portainer instance. Example: `https://portainer.example.com:9443` |
-| `ANTHROPIC_API_KEY` | — | Anthropic API key. Required for the Assistant and AI triage features. |
+| `AI_PROVIDER` | auto | `anthropic` or `openai`. Auto-detected from which key is set. Required only when both keys are present. |
+| `ANTHROPIC_API_KEY` | — | Anthropic API key. Enables the Anthropic provider. |
+| `OPENAI_API_KEY` | — | API key for any OpenAI-compatible endpoint. Enables the OpenAI provider. |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL of the OpenAI-compatible endpoint (no trailing `/chat/completions`). |
+| `OPENAI_MODEL` | — | Model identifier sent to the OpenAI-compatible endpoint. Required when using the OpenAI provider. |
 | `PORT` | `443` | HTTPS listen port inside the container. |
 | `HTTP_PORT` | `80` | HTTP redirect port inside the container. |
 | `SSL_CERT` | — | Path to TLS certificate file. Uses self-signed if not set. |
@@ -161,7 +188,7 @@ Sessions persist across page refreshes and are cleared on disconnect or when the
 
 ## Assistant
 
-The Assistant requires an `ANTHROPIC_API_KEY` to be configured on the server. Without it the Assistant button is not available.
+The Assistant requires an AI provider to be configured on the server — either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` (with `OPENAI_BASE_URL` and `OPENAI_MODEL`). Without one the Assistant button is not available.
 
 When answering health or performance questions, the Assistant automatically fetches diagnostic data (logs, pod conditions, Kubernetes events) before generating a response. It does not ask you to check these yourself.
 
