@@ -860,7 +860,9 @@ async function loadConfig() {
 }
 
 function updateAiBadges() {
-  const label = S.aiModel || '';
+  let label = '';
+  if (S.aiProvider === 'anthropic')   label = 'Claude';
+  else if (S.aiProvider === 'openai') label = S.aiModel || '';
   document.querySelectorAll('.ai-badge').forEach(el => { el.textContent = label; });
 }
 
