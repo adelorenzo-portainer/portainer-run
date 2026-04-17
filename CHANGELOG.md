@@ -11,6 +11,14 @@ branch.
 ## [Unreleased]
 
 ### Added
+- Per-namespace resource quota indicator on the Deploy form. After selecting a
+  namespace, a single-line summary appears below the dropdown showing CPU,
+  memory, and pod usage vs. the binding hard limit (e.g.
+  `Quota: CPU 1.2 / 4 · Mem 3Gi / 8Gi · Pods 12 / 30`). Aggregates correctly
+  across multiple ResourceQuotas in a namespace (uses `min(hard)` and
+  `max(used)` — the "worst case" view since Kubernetes admits only if every
+  RQ passes). Turns amber when any dimension is past 80% capacity. Silent
+  when the namespace has no quota or the token can't list ResourceQuotas.
 - OpenAI-compatible AI provider support via `OPENAI_API_KEY`, `OPENAI_BASE_URL`,
   `OPENAI_MODEL`. Works with OpenAI, Azure OpenAI, OpenRouter, Together AI, vLLM,
   Ollama, LM Studio, and any endpoint that speaks the OpenAI `/chat/completions`
