@@ -277,6 +277,7 @@ nav{border-right:1px solid var(--border);padding:20px 0;background:rgba(17,20,25
 .ai-panel-head{display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--surface2);border-bottom:1px solid var(--border);}
 .ai-panel-title{font-family:var(--mono);font-size:12px;font-weight:500;color:var(--text-bright);flex:1;}
 .ai-badge{font-family:var(--mono);font-size:10px;background:linear-gradient(135deg,rgba(14,165,233,.2),rgba(167,139,250,.2));border:1px solid rgba(14,165,233,.3);color:var(--accent);padding:2px 8px;border-radius:10px;letter-spacing:.04em;}
+.ai-badge:empty{display:none;}
 .ai-body{padding:20px;font-size:13.5px;line-height:1.8;color:var(--text);min-height:60px;}
 .ai-body p{margin-bottom:12px;}
 .ai-body p:last-child{margin-bottom:0;}
@@ -679,7 +680,7 @@ nav{border-right:1px solid var(--border);padding:20px 0;background:rgba(17,20,25
           <span id="dpLiveLabel" style="font-family:var(--mono);font-size:11px;color:var(--red);display:none;">LIVE</span>
         </div>
         <div style="display:flex;gap:8px;align-items:center;" id="dpAiTrigger" style="display:none;">
-          <span class="ai-badge">Claude</span>
+          <span class="ai-badge"></span>
           <button class="btn btn-primary btn-xs" onclick="runAITriageFromDetail()" id="dpTriageBtn">Analyse with AI</button>
         </div>
       </div>
@@ -688,7 +689,7 @@ nav{border-right:1px solid var(--border);padding:20px 0;background:rgba(17,20,25
       <div class="ai-panel" id="dpAiPanel" style="display:none;margin-bottom:12px;">
         <div class="ai-panel-head">
           <span class="ai-panel-title" id="dpAiTitle">Analysis</span>
-          <span class="ai-badge">Claude</span>
+          <span class="ai-badge"></span>
           <button class="btn btn-ghost btn-xs" onclick="document.getElementById('dpAiPanel').style.display='none'">✕</button>
         </div>
         <div class="ai-body" id="dpAiBody"></div>
@@ -741,7 +742,7 @@ nav{border-right:1px solid var(--border);padding:20px 0;background:rgba(17,20,25
 <div id="chatPanel" class="chat-panel">
   <div class="chat-header">
     <span class="chat-title">Assistant</span>
-    <span class="ai-badge">Claude</span>
+    <span class="ai-badge"></span>
     <button class="btn btn-ghost btn-xs" onclick="toggleChat()" style="margin-left:auto;">✕</button>
   </div>
   <div class="chat-input-wrap">
@@ -779,6 +780,8 @@ const S = {
   environments: [],
   isAdmin: false,
   isAiAvailable: false,
+  aiProvider: null,
+  aiModel: null,
   currentDetail: null,
   deleteTarget: null,
   logStream: null,
@@ -843,11 +846,22 @@ async function loadConfig() {
     el.textContent = d.portainerUrl || 'Unknown';
     el.style.color = 'var(--accent)';
     S.isAiAvailable = !!d.aiAvailable;
+    S.aiProvider = d.aiProvider || null;
+    S.aiModel = d.aiModel || null;
+    updateAiBadges();
   } catch(e) {
     el.textContent = 'Proxy not reachable — is server.js running?';
     el.style.color = 'var(--red)';
     S.isAiAvailable = false;
+    S.aiProvider = null;
+    S.aiModel = null;
+    updateAiBadges();
   }
+}
+
+function updateAiBadges() {
+  const label = S.aiModel || '';
+  document.querySelectorAll('.ai-badge').forEach(el => { el.textContent = label; });
 }
 
 // ── CONNECT ───────────────────────────────────────────────────────────────────
@@ -890,7 +904,13 @@ async function connect() {
     // Re-fetch server config to ensure AI availability is current
     try {
       const cfgR = await fetch('/config');
-      if (cfgR.ok) { const cfg = await cfgR.json(); S.isAiAvailable = !!cfg.aiAvailable; }
+      if (cfgR.ok) {
+        const cfg = await cfgR.json();
+        S.isAiAvailable = !!cfg.aiAvailable;
+        S.aiProvider = cfg.aiProvider || null;
+        S.aiModel = cfg.aiModel || null;
+        updateAiBadges();
+      }
     } catch(_) {}
 
     // Persist token for page refresh survival
@@ -1438,7 +1458,7 @@ async function sendChat() {
     const ctx = buildContext();
 
     // Detect if this is a health/triage question about a specific service
-    // If so, gather diagnostics before sending to Claude
+    // If so, gather diagnostics before sending to the AI provider
     let diagnosticData = '';
     const lowerText = text.toLowerCase();
     const isScaleQ = /scale\s+[\w-]+\s+(?:(?:down|up)\s+to|to)\s+\d+/i.test(lowerText);
@@ -1531,7 +1551,6 @@ IMPORTANT RULES:
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
         max_tokens: 1500,
         stream: true,
         system: systemPrompt,
@@ -1689,7 +1708,7 @@ async function handleComposePaste(yaml) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514', max_tokens: 2000, stream: false,
+        max_tokens: 2000, stream: false,
         system: `Translate the Docker Compose file into a Portainer Run deployment config.
 
 RULES:
@@ -1820,7 +1839,7 @@ function disconnect() {
     fetch('/cache', { method: 'DELETE', headers: { 'X-API-Key': S.token } }).catch(() => {});
   }
   try { sessionStorage.removeItem('portainer_run_token'); } catch(_) {}
-  S.token = ''; S.environments = []; S.currentDetail = null; S.isAdmin = false; S.isAiAvailable = false;
+  S.token = ''; S.environments = []; S.currentDetail = null; S.isAdmin = false; S.isAiAvailable = false; S.aiProvider = null; S.aiModel = null; updateAiBadges();
   try { sessionStorage.removeItem('portainer_run_token'); } catch(_) {}
   S.cache = { deployments: [], lastFetch: null, fetching: false, everLoaded: false };
   if (S.refreshTimer) { clearTimeout(S.refreshTimer); S.refreshTimer = null; }
@@ -3199,7 +3218,6 @@ ${text || '[No log output]'}`;
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
         max_tokens: 2000,
         stream: true,
         messages: [{ role: 'user', content: `You are an operations assistant helping a user diagnose a containerised application. Use plain English — avoid Kubernetes jargon where possible, and explain technical terms when you must use them.

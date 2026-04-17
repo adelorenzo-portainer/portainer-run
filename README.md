@@ -28,7 +28,7 @@ Clicking any service opens a detail panel with six tabs.
 
 **Metrics** shows CPU and memory sparklines per container, polled every 15 seconds via `metrics.k8s.io`. Requires metrics-server on the cluster.
 
-**Logs** streams or fetches pod logs with per-container selection, severity filtering, and text search. The AI Analyse button gathers logs, pod conditions, and Kubernetes events from all three levels (Deployment, ReplicaSet, Pod) and sends them to Claude for triage. This covers failure modes where no logs exist yet — scheduling failures, image pull errors, resource constraints — because it reads from events rather than relying on application output.
+**Logs** streams or fetches pod logs with per-container selection, severity filtering, and text search. The AI Analyse button gathers logs, pod conditions, and Kubernetes events from all three levels (Deployment, ReplicaSet, Pod) and sends them to the configured AI provider for triage. This covers failure modes where no logs exist yet — scheduling failures, image pull errors, resource constraints — because it reads from events rather than relying on application output.
 
 **Revisions** lists ReplicaSet history, most recent first, with a Rollback button per revision.
 
@@ -61,7 +61,7 @@ The user's credentials never appear in server logs. The AI provider key never re
 
 Two providers are supported:
 
-- **Anthropic** — set `ANTHROPIC_API_KEY`. Uses Claude directly.
+- **Anthropic** — set `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` (a valid Anthropic model identifier — see Anthropic's model docs). Uses the Anthropic `/v1/messages` API directly.
 - **OpenAI-compatible** — set `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL`. Works with any endpoint that implements the OpenAI `/chat/completions` shape: OpenAI, Azure OpenAI, OpenRouter, Together AI, vLLM, Ollama, LM Studio, etc.
 
 The frontend always speaks the Anthropic message shape. When the OpenAI provider is active, the proxy translates the request into OpenAI `/chat/completions` and translates the streaming response back into Anthropic-style SSE events — the UI is unaware of the swap.
@@ -108,6 +108,7 @@ docker run -d \
   -p 80:80 \
   -e PORTAINER_URL=https://portainer.example.com:9443 \
   -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e ANTHROPIC_MODEL=<your-model-id> \
   --name portainer-run \
   portainer-run
 ```
@@ -123,6 +124,7 @@ docker run -d \
   -v /path/to/certs:/certs \
   -e PORTAINER_URL=https://portainer.example.com:9443 \
   -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e ANTHROPIC_MODEL=<your-model-id> \
   -e SSL_CERT=/certs/fullchain.pem \
   -e SSL_KEY=/certs/privkey.pem \
   --name portainer-run \
@@ -138,6 +140,7 @@ docker run -d \
   -v /data/portainer-run:/app/data \
   -e PORTAINER_URL=https://portainer.example.com:9443 \
   -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e ANTHROPIC_MODEL=<your-model-id> \
   --name portainer-run \
   portainer-run
 ```
@@ -193,6 +196,7 @@ services:
       - PORTAINER_URL=${PORTAINER_URL}
       - AI_PROVIDER=${AI_PROVIDER:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-}
@@ -215,6 +219,7 @@ If the container cannot resolve your Portainer hostname (error: `EAI_AGAIN`), ad
 | `PORTAINER_URL` | — | Full URL of your Portainer instance. Example: `https://portainer.example.com:9443` |
 | `AI_PROVIDER` | auto | `anthropic` or `openai`. Auto-detected from which key is set. Required only when both keys are present. |
 | `ANTHROPIC_API_KEY` | — | Anthropic API key. Enables the Anthropic provider. |
+| `ANTHROPIC_MODEL` | — | Model identifier sent to the Anthropic API. Required when using the Anthropic provider. |
 | `OPENAI_API_KEY` | — | API key for any OpenAI-compatible endpoint. Enables the OpenAI provider. |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL of the OpenAI-compatible endpoint (no trailing `/chat/completions`). |
 | `OPENAI_MODEL` | — | Model identifier sent to the OpenAI-compatible endpoint. Required when using the OpenAI provider. |
@@ -235,7 +240,7 @@ Sessions persist across page refreshes and are cleared on disconnect or when the
 
 ## Assistant
 
-The Assistant requires an AI provider to be configured on the server — either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` (with `OPENAI_BASE_URL` and `OPENAI_MODEL`). Without one the Assistant button is not available.
+The Assistant requires an AI provider to be configured on the server — either Anthropic (`ANTHROPIC_API_KEY` + `ANTHROPIC_MODEL`) or OpenAI-compatible (`OPENAI_API_KEY` + `OPENAI_BASE_URL` + `OPENAI_MODEL`). Without one the Assistant button is not available.
 
 When answering health or performance questions, the Assistant automatically fetches diagnostic data (logs, pod conditions, Kubernetes events) before generating a response. It does not ask you to check these yourself.
 

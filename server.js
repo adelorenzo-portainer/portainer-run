@@ -17,6 +17,7 @@
  *   PORTAINER_URL=https://portainer.example.com:9443   (required)
  *   AI_PROVIDER=anthropic|openai                       (optional, auto-detected)
  *   ANTHROPIC_API_KEY=sk-ant-...                       (enables Anthropic provider)
+ *   ANTHROPIC_MODEL=<model-id>                         (required when using Anthropic)
  *   OPENAI_API_KEY=sk-...                              (enables OpenAI provider)
  *   OPENAI_BASE_URL=https://api.openai.com/v1          (optional, OpenAI-compatible endpoint)
  *   OPENAI_MODEL=gpt-4o-mini                           (required when using OpenAI)
@@ -52,6 +53,7 @@ if (fs.existsSync(envFile)) {
 
 const PORTAINER_URL    = (process.env.PORTAINER_URL || '').replace(/\/$/, '');
 const ANTHROPIC_KEY    = process.env.ANTHROPIC_API_KEY || '';
+const ANTHROPIC_MODEL  = process.env.ANTHROPIC_MODEL || '';
 const OPENAI_KEY       = process.env.OPENAI_API_KEY || '';
 const OPENAI_BASE_URL  = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 const OPENAI_MODEL     = process.env.OPENAI_MODEL || '';
@@ -102,6 +104,15 @@ if (AI_PROVIDER === 'openai') {
     process.exit(1);
   }
 }
+
+if (AI_PROVIDER === 'anthropic' && !ANTHROPIC_MODEL) {
+  console.error('\n❌  ANTHROPIC_MODEL must be set when using the Anthropic provider\n');
+  process.exit(1);
+}
+
+const ACTIVE_MODEL = AI_PROVIDER === 'openai' ? OPENAI_MODEL
+                   : AI_PROVIDER === 'anthropic' ? ANTHROPIC_MODEL
+                   : null;
 
 if (!AI_PROVIDER) {
   console.warn('\n⚠️   No AI provider configured (set ANTHROPIC_API_KEY or OPENAI_API_KEY) — AI triage will be unavailable\n');
@@ -269,6 +280,9 @@ function proxyToPortainer(req, res, upstreamPath, body) {
 }
 
 function proxyToAnthropic(req, res, payload) {
+  // Server is authoritative on model selection; ignore any model field the
+  // frontend sent so the choice lives entirely in env config.
+  payload = { ...payload, model: ANTHROPIC_MODEL };
   const outBody = Buffer.from(JSON.stringify(payload));
   const headers = {
     'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY,
@@ -475,7 +489,7 @@ async function handleRequest(req, res) {
       portainerUrl: PORTAINER_URL,
       aiAvailable:  !!AI_PROVIDER,
       aiProvider:   AI_PROVIDER,
-      aiModel:      AI_PROVIDER === 'openai' ? OPENAI_MODEL : null,
+      aiModel:      ACTIVE_MODEL,
     }));
     return;
   }
@@ -517,7 +531,7 @@ const httpsServer = https.createServer(tlsOptions, handleRequest);
 
 httpsServer.listen(PORT, () => {
   let aiLine = '✗ not configured';
-  if (AI_PROVIDER === 'anthropic') aiLine = '✓ anthropic';
+  if (AI_PROVIDER === 'anthropic') aiLine = `✓ anthropic (${ANTHROPIC_MODEL})`;
   if (AI_PROVIDER === 'openai')    aiLine = `✓ openai-compatible (${OPENAI_MODEL} @ ${OPENAI_BASE_URL})`;
   console.log('\n✅  Portainer Run started');
   console.log(`    UI:        https://localhost${PORT !== 443 ? ':' + PORT : ''}`);
