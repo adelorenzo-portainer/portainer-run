@@ -60,6 +60,12 @@ branch.
 - All "Claude" strings removed from the fork's source. Any Claude-brand text
   the user sees comes from their own env configuration (e.g. setting
   `ANTHROPIC_MODEL=claude-sonnet-4-...`). [`bd61a2e`]
+- All three AI system prompts (chat assistant, Compose translator, AI Analyse)
+  now instruct the model to reply in English using Latin characters only.
+  Qwen-family models occasionally drift into Chinese tokens — especially on
+  connector words or chain-of-thought output — and the directive stops it.
+  Benign on Claude / GPT / other models which follow input language by
+  default. [`0f28928`]
 
 ### Fixed
 - "Open in Deploy form" button now appears reliably across models. New
@@ -73,3 +79,27 @@ branch.
   `\s*$` pattern with `/gm` was greedy across the newline after the header
   text, causing the next paragraph to collapse onto the same line. Replaced
   with `[ \t]*$` in both header and blockquote patterns. [`06fbcb7`]
+- Session cache (`cache.json`) is no longer at risk of corruption or lost
+  updates. Writes now go via a `.tmp.<pid>` sibling + atomic rename, so a
+  crash mid-write can't truncate the file. Concurrent read-modify-write
+  operations are serialised through a single promise chain so two overlapping
+  POSTs/DELETEs can't drop one another's update. [`03f53d0`]
+
+### Security
+- `esc()` is now safe to interpolate inside HTML attributes. Previously it
+  only escaped `& < >`, so a Kubernetes value containing a literal `"` (image
+  tag, env var value, label) could break out of `value="..."` / `title="..."`
+  and inject arbitrary JavaScript. Now also escapes `"` and `'`. Used in
+  roughly ten attribute-interpolation sites across the deployment list, edit
+  form, and namespace/pod dropdowns. [`0f28928`]
+- `/ai/triage` now requires a valid Portainer `X-API-Key`. Previously anyone
+  reachable at the proxy could burn the server-configured Anthropic or
+  OpenAI-compatible credits by hitting the endpoint directly, since no signal
+  tied the caller to the authenticated session. Tokens are validated against
+  Portainer's `/api/users/me`, with a 60-second positive cache keyed by
+  sha256(token) so we don't round-trip per AI request; negative results are
+  not cached so rotated/revoked tokens take effect on the next call. [`3118160`]
+- Container now runs as non-root (`node`, uid 1000). `CAP_NET_BIND_SERVICE` is
+  granted on the node binary via `setcap` at build time so binding 443/80
+  still works. Closes a standard container-hardening gap — a compromise of
+  the Node process no longer has uid 0 inside the container. [`11eb139`]
