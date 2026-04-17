@@ -18,7 +18,7 @@ Portainer Run connects to your Portainer instance using either username/password
 
 **Services** lists all deployments tagged `managed-by=portainer-run`, showing name, image, environment, status, exposure, and age at a glance.
 
-**Deploy** provides a Cloud Run-style deployment form covering single-container and multi-container (sidecar) workloads, persistent storage (RWO via PVC), environment variables, resource limits, and service exposure (NodePort, LoadBalancer, Ingress). All deployments are tagged `managed-by=portainer-run`.
+**Deploy** provides a Cloud Run-style deployment form covering single-container and multi-container (sidecar) workloads, persistent storage (RWO via PVC), environment variables, resource limits, and service exposure (NodePort, LoadBalancer, Ingress). All deployments are tagged `managed-by=portainer-run`. Namespaces can be created directly from the form and are tagged with the same label; system namespaces (either flagged via Portainer or matching the conventional system list) are hidden from the picker.
 
 Clicking any service opens a detail panel with six tabs.
 
