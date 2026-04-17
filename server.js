@@ -482,12 +482,59 @@ function proxyToOpenAI(req, res, payload) {
   upstream.end();
 }
 
-function proxyToAI(req, res, body) {
+// Validate the X-API-Key against Portainer. Caller must supply a valid Portainer
+// PAT — without this check anyone reachable at /ai/triage could burn the
+// server's AI credits. Positive results are cached for AUTH_CACHE_TTL_MS so we
+// don't round-trip to Portainer on every AI request; negatives are not cached
+// so rotated/revoked tokens get a fresh check next time.
+const AUTH_CACHE_TTL_MS = 60_000;
+const authCache = new Map();       // sha256(token) → expiresAt (ms)
+
+function validatePortainerToken(token) {
+  const key = cacheKey(token);
+  const now = Date.now();
+  const exp = authCache.get(key);
+  if (exp && exp > now) return Promise.resolve(true);
+
+  return new Promise((resolve) => {
+    const opts = {
+      hostname: pHost, port: pPort, path: '/api/users/me', method: 'GET',
+      headers: { 'X-API-Key': token, 'Accept': 'application/json' },
+      rejectUnauthorized: false,
+    };
+    const transport = pIsHttps ? https : http;
+    const ureq = transport.request(opts, ures => {
+      // Drain to free the socket, we only care about status.
+      ures.resume();
+      const ok = ures.statusCode >= 200 && ures.statusCode < 300;
+      if (ok) authCache.set(key, now + AUTH_CACHE_TTL_MS);
+      resolve(ok);
+    });
+    ureq.on('error', () => resolve(false));
+    ureq.end();
+  });
+}
+
+async function proxyToAI(req, res, body) {
   if (!AI_PROVIDER) {
     res.writeHead(503, { 'Content-Type': 'application/json', ...CORS });
     res.end(JSON.stringify({ error: { message: 'No AI provider configured on server (set ANTHROPIC_API_KEY or OPENAI_API_KEY)' } }));
     return;
   }
+
+  const token = req.headers['x-api-key'] || '';
+  if (!token) {
+    res.writeHead(401, { 'Content-Type': 'application/json', ...CORS });
+    res.end(JSON.stringify({ error: { message: 'X-API-Key header required' } }));
+    return;
+  }
+  const valid = await validatePortainerToken(token);
+  if (!valid) {
+    res.writeHead(401, { 'Content-Type': 'application/json', ...CORS });
+    res.end(JSON.stringify({ error: { message: 'Invalid or expired Portainer token' } }));
+    return;
+  }
+
   let payload;
   try { payload = JSON.parse((body || Buffer.alloc(0)).toString()); } catch(_) {
     res.writeHead(400, { 'Content-Type': 'application/json', ...CORS });

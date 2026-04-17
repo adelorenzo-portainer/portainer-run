@@ -1581,7 +1581,7 @@ IMPORTANT RULES:
 
     const response = await fetch('/ai/triage', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': S.token },
       body: JSON.stringify({
         max_tokens: 1500,
         stream: true,
@@ -1738,7 +1738,7 @@ async function handleComposePaste(yaml) {
     const ctx = buildContext();
     const response = await fetch('/ai/triage', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': S.token },
       body: JSON.stringify({
         max_tokens: 2000, stream: false,
         system: `Translate the Docker Compose file into a Portainer Run deployment config.
@@ -3391,7 +3391,7 @@ ${text || '[No log output]'}`;
 
     const response = await fetch('/ai/triage', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': S.token },
       body: JSON.stringify({
         max_tokens: 2000,
         stream: true,
