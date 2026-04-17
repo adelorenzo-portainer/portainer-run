@@ -155,6 +155,53 @@ docker run -d \
   portainer-run
 ```
 
+### Run (OpenAI-compatible endpoint, e.g. Ollama)
+
+```bash
+docker run -d \
+  -p 443:443 \
+  -p 80:80 \
+  --add-host=host.docker.internal:host-gateway \
+  -e PORTAINER_URL=https://portainer.example.com:9443 \
+  -e OPENAI_API_KEY=ollama \
+  -e OPENAI_BASE_URL=http://host.docker.internal:11434/v1 \
+  -e OPENAI_MODEL=llama3.1:8b \
+  --name portainer-run \
+  portainer-run
+```
+
+Notes specific to this path:
+
+- `OPENAI_API_KEY` is required by the proxy but Ollama ignores its value — any non-empty string works. Hosted endpoints (OpenAI, OpenRouter, Together) need a real key.
+- `--add-host=host.docker.internal:host-gateway` is required on Linux so the container can reach an Ollama (or vLLM, LM Studio) instance running on the host. macOS/Windows Docker Desktop resolves `host.docker.internal` automatically — the flag is harmless there.
+- For Ollama to accept connections from inside the container, start it with `OLLAMA_HOST=0.0.0.0 ollama serve` (the default `127.0.0.1` bind is unreachable from a container).
+- Pick a model with `ollama pull <name>` first; smaller models (under ~7B) often fumble the structured `deploy-config` JSON the Assistant emits when describing deployments.
+
+### Run with docker-compose
+
+```yaml
+# compose.yaml
+name: portainer-run
+services:
+  portainer-run:
+    image: portainer-run
+    container_name: portainer-run
+    ports:
+      - 443:443
+      - 80:80
+    environment:
+      - PORTAINER_URL=${PORTAINER_URL}
+      - AI_PROVIDER=${AI_PROVIDER:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+```
+
+Put the values in a sibling `.env` file (which should be git-ignored). Switch providers by editing `.env` only — no compose changes needed.
+
 ### DNS resolution issues
 
 If the container cannot resolve your Portainer hostname (error: `EAI_AGAIN`), add `--dns 8.8.8.8` to the run command.
