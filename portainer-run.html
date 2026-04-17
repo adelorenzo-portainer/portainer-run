@@ -470,9 +470,12 @@ nav{border-right:1px solid var(--border);padding:20px 0;background:rgba(17,20,25
                 <div class="hint">Portainer environment to deploy into</div>
               </div>
               <div class="field">
-                <label>Namespace</label>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                  <label style="margin:0;">Namespace</label>
+                  <button type="button" id="nsCreateBtn" class="btn btn-ghost btn-xs" style="display:none;padding:2px 10px;font-size:10px;" onclick="openCreateNsModal()">+ New</button>
+                </div>
                 <select id="dNamespace"><option value="">Select target first...</option></select>
-                <div class="hint">Namespace must already exist in the target</div>
+                <div class="hint">Pick an existing namespace or create a new one.</div>
               </div>
             </div>
             <div class="frow" style="margin-bottom:16px;">
@@ -767,6 +770,27 @@ nav{border-right:1px solid var(--border);padding:20px 0;background:rgba(17,20,25
     <div class="modal-foot">
       <button class="btn btn-ghost btn-sm" onclick="closeDeleteModal()">Cancel</button>
       <button class="btn btn-danger btn-sm" id="confirmDeleteBtn" onclick="confirmDelete()">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── CREATE NAMESPACE MODAL ── -->
+<div class="modal-overlay" id="createNsModal">
+  <div class="modal">
+    <div class="modal-head"><h3>Create Namespace</h3></div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Name</label>
+        <input type="text" id="createNsName" placeholder="my-namespace" autocomplete="off"
+               onkeydown="if(event.key==='Enter')confirmCreateNs();" />
+        <div class="hint">Lowercase alphanumeric and hyphens. Must start and end with a letter or number. Max 63 characters.</div>
+      </div>
+      <div class="hint" style="margin-top:10px;">The new namespace will be tagged <code>managed-by=portainer-run</code> for consistency with deployments.</div>
+      <div id="createNsError" style="color:var(--red);font-size:12px;margin-top:10px;display:none;"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost btn-sm" onclick="closeCreateNsModal()">Cancel</button>
+      <button class="btn btn-primary btn-sm" id="confirmCreateNsBtn" onclick="confirmCreateNs()">Create</button>
     </div>
   </div>
 </div>
@@ -1833,6 +1857,9 @@ function nav(name, el) {
     renderDashboard();
   } else if (name === 'deploy') {
     onExposeTypeChange();
+    // Refresh the namespace dropdown on every tab visit so namespaces
+    // added on the cluster after login become visible without reconnecting.
+    if (document.getElementById('dEnvId').value) onEnvChange();
   }
 }
 
@@ -2588,6 +2615,53 @@ function onExposeTypeChange() {
   }
 }
 
+// Fallback list for when Portainer's /kubernetes/{id}/namespaces endpoint
+// isn't reachable (namespace-scoped token, older Portainer version). Kubernetes
+// distributions don't expose an "is-system" bit natively, so the client uses
+// conventional names here. Portainer's own UI uses the same baseline and lets
+// operators mark additional namespaces as system — but that extra list only
+// comes from Portainer's endpoint, so namespaces explicitly flagged in the
+// Portainer UI can only be filtered when that endpoint is available.
+const DEFAULT_SYSTEM_NAMESPACES = new Set([
+  'kube-system', 'kube-public', 'kube-node-lease',
+  'portainer', 'portainer-agent', 'portainer-agent-system',
+]);
+
+// Returns { names: [non-system namespace names], source: 'portainer' | 'kubernetes' }.
+// Throws on hard errors (auth failures propagate up so the caller can show the
+// namespace-scoped-token hint).
+async function fetchNonSystemNamespaces(envId) {
+  // 1. Try Portainer's native endpoint. Response shape is a map keyed by name
+  //    with { Name, IsSystem, ... } values.
+  try {
+    const pr = await api(`/kubernetes/${envId}/namespaces`);
+    if (pr.ok) {
+      const data = await pr.json();
+      const entries = Array.isArray(data) ? data : Object.values(data || {});
+      const names = entries
+        .filter(ns => ns && !ns.IsSystem)
+        .map(ns => ns.Name || ns.name)
+        .filter(Boolean);
+      if (names.length || entries.length) {
+        return { names, source: 'portainer' };
+      }
+    }
+  } catch(_) { /* fall through */ }
+
+  // 2. Fall back to the raw Kubernetes API and a conventional blocklist.
+  const kr = await kube(envId, '/api/v1/namespaces');
+  if (kr.status === 401 || kr.status === 403) {
+    const err = new Error('namespace-scoped');
+    err.scoped = true;
+    throw err;
+  }
+  if (!kr.ok) throw new Error('HTTP ' + kr.status);
+  const names = (await kr.json()).items
+    .map(n => n.metadata.name)
+    .filter(n => !DEFAULT_SYSTEM_NAMESPACES.has(n));
+  return { names, source: 'kubernetes' };
+}
+
 async function onEnvChange() {
   const envId = document.getElementById('dEnvId').value;
   const nsSel = document.getElementById('dNamespace');
@@ -2597,21 +2671,31 @@ async function onEnvChange() {
     showManualNsInput(false);
     return;
   }
-  nsSel.innerHTML = '<option value="">Loading namespaces...</option>';
+  // Remember the current pick so silent refreshes don't wipe the user's
+  // selection. Only show the "Loading..." placeholder on a cold load.
+  const prevValue = nsSel.value;
+  const hadOptions = !!nsSel.querySelector('option[value]:not([value=""])');
+  if (!hadOptions) {
+    nsSel.innerHTML = '<option value="">Loading namespaces...</option>';
+  }
   status.textContent = '';
   showManualNsInput(false);
   try {
-    const r = await kube(envId, '/api/v1/namespaces');
-    if (r.status === 403 || r.status === 401) {
-      // Token cannot list namespaces at cluster scope — namespace-scoped PAT
-      showManualNsInput(true);
-      nsSel.innerHTML = '<option value="">—</option>';
-      status.textContent = 'Token is namespace-scoped — enter your namespace below.';
-      status.style.color = 'var(--amber)';
-      return;
+    let allNss;
+    try {
+      const r = await fetchNonSystemNamespaces(envId);
+      allNss = r.names;
+    } catch(err) {
+      if (err.scoped) {
+        // Token cannot list namespaces at cluster scope — namespace-scoped PAT
+        showManualNsInput(true);
+        nsSel.innerHTML = '<option value="">—</option>';
+        status.textContent = 'Token is namespace-scoped — enter your namespace below.';
+        status.style.color = 'var(--amber)';
+        return;
+      }
+      throw err;
     }
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const allNss = (await r.json()).items.map(n => n.metadata.name);
     // Only show namespaces where this token can actually list deployments
     const accessible = (await Promise.all(
       allNss.map(async ns => {
@@ -2629,6 +2713,7 @@ async function onEnvChange() {
       return;
     }
     nsSel.innerHTML = accessible.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+    if (prevValue && accessible.includes(prevValue)) nsSel.value = prevValue;
     status.textContent = accessible.length + ' accessible namespace(s)';
     status.style.color = 'var(--green)';
     showManualNsInput(false);
@@ -2660,6 +2745,14 @@ function showManualNsInput(show) {
     document.getElementById('dNamespace').closest('.field').after(el);
   }
   el.style.display = show ? 'block' : 'none';
+
+  // Show "+ New" only when an environment is picked and we're NOT in the
+  // namespace-scoped fallback (scoped tokens can't create cluster-wide namespaces).
+  const createBtn = document.getElementById('nsCreateBtn');
+  if (createBtn) {
+    const envSelected = !!document.getElementById('dEnvId').value;
+    createBtn.style.display = (envSelected && !show) ? 'inline-flex' : 'none';
+  }
 }
 
 function resetDeployForm() {
@@ -2849,6 +2942,79 @@ function openDeleteModal(envId, ns, name) {
   S.deleteTarget = { envId, ns, name };
   document.getElementById('deleteTarget').textContent = name;
   document.getElementById('deleteModal').classList.add('open');
+}
+
+// ── CREATE NAMESPACE ──────────────────────────────────────────────────────────
+function openCreateNsModal() {
+  if (!document.getElementById('dEnvId').value) return;
+  document.getElementById('createNsName').value = '';
+  const err = document.getElementById('createNsError');
+  err.textContent = ''; err.style.display = 'none';
+  document.getElementById('createNsModal').classList.add('open');
+  setTimeout(() => document.getElementById('createNsName').focus(), 50);
+}
+
+function closeCreateNsModal() {
+  document.getElementById('createNsModal').classList.remove('open');
+}
+
+function showCreateNsError(msg) {
+  const err = document.getElementById('createNsError');
+  err.textContent = msg;
+  err.style.display = 'block';
+}
+
+async function confirmCreateNs() {
+  const envId = document.getElementById('dEnvId').value;
+  if (!envId) return;
+  const name = document.getElementById('createNsName').value.trim();
+
+  // DNS-1123 label: lowercase alphanumeric + hyphens, start/end alphanumeric, max 63
+  if (!name) return showCreateNsError('Name is required.');
+  if (name.length > 63) return showCreateNsError('Name must be 63 characters or fewer.');
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(name)) {
+    return showCreateNsError('Invalid name. Use lowercase letters, digits, and hyphens; start and end with a letter or digit.');
+  }
+
+  const btn = document.getElementById('confirmCreateNsBtn');
+  btn.disabled = true; btn.textContent = 'Creating...';
+  try {
+    const r = await kube(envId, '/api/v1/namespaces', {
+      method: 'POST',
+      body: JSON.stringify({
+        apiVersion: 'v1',
+        kind: 'Namespace',
+        metadata: {
+          name,
+          labels: { 'managed-by': 'portainer-run' },
+        },
+      }),
+    });
+    if (r.status === 409) return showCreateNsError(`Namespace "${name}" already exists.`);
+    if (r.status === 401 || r.status === 403) return showCreateNsError('Your token is not allowed to create namespaces on this cluster.');
+    if (r.status === 422) {
+      let msg = 'Kubernetes rejected the namespace definition.';
+      try { const body = await r.json(); if (body?.message) msg = body.message; } catch(_) {}
+      return showCreateNsError(msg);
+    }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+
+    toast(`Namespace "${name}" created`, 'ok');
+    closeCreateNsModal();
+    // Refresh the dropdown and select the new namespace. onEnvChange already
+    // preserves the current <select> value across refreshes, so pre-setting
+    // it here keeps the new namespace picked once the options repopulate.
+    const sel = document.getElementById('dNamespace');
+    // Add the option immediately so the preserve-selection logic sees it.
+    const opt = document.createElement('option');
+    opt.value = name; opt.textContent = name; opt.selected = true;
+    sel.appendChild(opt);
+    onEnvChange();
+  } catch(e) {
+    showCreateNsError('Create failed: ' + (e.message || 'unknown error'));
+  } finally {
+    btn.disabled = false; btn.textContent = 'Create';
+  }
 }
 
 function closeDeleteModal() {
@@ -3632,7 +3798,7 @@ function toggleMetricsPolling() {
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && document.getElementById('apiToken') === document.activeElement) connect();
-  if (e.key === 'Escape') { closeDetail(); closeDeleteModal(); }
+  if (e.key === 'Escape') { closeDetail(); closeDeleteModal(); closeCreateNsModal(); }
 });
 
 
