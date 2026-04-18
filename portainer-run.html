@@ -1575,7 +1575,7 @@ IMPORTANT RULES:
   \`\`\`deploy-config
   {"name":"my-app","namespace":"default","instances":1,"exposure":{"type":"NodePort","ports":[80]},"containers":[{"name":"web","image":"nginx:latest","env":[],"cpuReq":"100m","cpuLim":"500m","memReq":"128Mi","memLim":"512Mi","storage":null}],"warnings":[]}
   \`\`\`
-  Required fields: name, namespace, instances, exposure, containers (array). Each container needs: name, image. Optional per container: env (array of {name,value}), cpuReq/cpuLim/memReq/memLim, storage ({name,size,mountPath} or null). Add a brief sentence before or after the block, never inside.
+  Required fields: name, namespace, instances, exposure, containers (array). Each container needs: name, image. Optional per container: env, cpuReq/cpuLim/memReq/memLim, storage ({name,size,mountPath} or null). Each env entry takes one of three shapes: {name,value} for an inline value, {name,secretRef:{name,key}} to pull from a Kubernetes Secret, or {name,configMapRef:{name,key}} to pull from a ConfigMap — prefer secretRef whenever a value looks like a credential (passwords, tokens, keys). Add a brief sentence before or after the block, never inside.
 - If LIVE DIAGNOSTIC DATA is provided above, you already have the logs, events, and pod status. Analyse them immediately and give a specific answer. NEVER ask the user to go check the logs or metrics themselves — you already have that data. NEVER output a JSON action plan. Just answer in plain English based on what you can see.
 - Never use Kubernetes jargon. Say "instances" not "replicas", "stopped" not "CrashLoopBackOff", "restarting" not "CrashLoopBackOff".
 - Always respond in English. Do not use Chinese, Japanese, Korean, or other non-Latin characters in your reply, even for connector words or internal reasoning. The only exception is when quoting log lines or container output verbatim.`;
@@ -1748,6 +1748,7 @@ RULES:
 - All services become separate containers in ONE deployment (sidecar model, shared localhost network)
 - Each compose service maps to exactly ONE container object in the containers array
 - Each container gets ONLY the environment variables defined for THAT service in the compose file — do NOT merge env vars across services
+- Env-var entries take one of three shapes: {name,value} (inline), {name,secretRef:{name,key}} (pull from a Kubernetes Secret), or {name,configMapRef:{name,key}} (pull from a ConfigMap). Compose files don't reference K8s Secrets/ConfigMaps directly; emit {name,value} unless a value is clearly a credential (e.g. *_PASSWORD, *_TOKEN, *_API_KEY) — in that case still emit {name,value} but add a warning suggesting the user replace it with a secretRef after deploying.
 - The first service listed is the primary container, all others are sidecars
 - volumes become storage config on the container that mounts them
 - ports from the first service become the exposure config
@@ -1822,11 +1823,14 @@ function applyDeployConfig(cfg) {
     if (g('memReq')) g('memReq').value = ct.memReq || '';
     if (g('memLim')) g('memLim').value = ct.memLim || '';
     if (ct.env?.length) {
-      const envList = card.querySelector(`[data-envlist="${id}"]`);
-      if (envList) ct.env.forEach(ev => {
-        const row = document.createElement('div');
-        row.innerHTML = editEnvRow(id, Date.now(), ev.name, ev.value || '');
-        envList.appendChild(row.firstElementChild);
+      ct.env.forEach(ev => {
+        // Three accepted shapes from the chat assistant:
+        //   { name, value }                          → inline
+        //   { name, secretRef:    { name, key } }    → Secret reference
+        //   { name, configMapRef: { name, key } }    → ConfigMap reference
+        if (ev.secretRef)         addEnvRow(id, ev.name, 'secret',    '', ev.secretRef.name,    ev.secretRef.key);
+        else if (ev.configMapRef) addEnvRow(id, ev.name, 'configMap', '', ev.configMapRef.name, ev.configMapRef.key);
+        else                      addEnvRow(id, ev.name, 'value', ev.value || '');
       });
     }
     if (ct.storage) {
@@ -2558,13 +2562,44 @@ function readContainerVolume(id) {
   return { name, storageClass, size, mountPath };
 }
 
-function addEnvRow(containerId) {
+// Env-var row template. The Source dropdown switches the row between an inline
+// value and a Secret/ConfigMap reference. The hidden mode-specific fields are
+// in the same row, toggled by onEnvSourceChange so the layout stays compact.
+function envRowMarkup(name, source, value, refName, refKey) {
+  source = source || 'value';
+  return `
+    <input type="text" data-env-field="name" placeholder="KEY" value="${esc(name || '')}" style="background:var(--bg);border:1px solid var(--border2);border-radius:5px;color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;outline:none;" />
+    <select data-env-field="source" onchange="onEnvSourceChange(this)" style="background:var(--bg);border:1px solid var(--border2);border-radius:5px;color:var(--text-bright);font-family:var(--mono);font-size:11px;padding:6px 8px;outline:none;width:auto;">
+      <option value="value"     ${source === 'value'     ? 'selected' : ''}>Value</option>
+      <option value="secret"    ${source === 'secret'    ? 'selected' : ''}>Secret</option>
+      <option value="configMap" ${source === 'configMap' ? 'selected' : ''}>ConfigMap</option>
+    </select>
+    <input type="text" data-env-field="value" placeholder="value" value="${esc(value || '')}" style="background:var(--bg);border:1px solid var(--border2);border-radius:5px;color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;outline:none;${source === 'value' ? '' : 'display:none;'}" />
+    <input type="text" data-env-field="refName" placeholder="${source === 'configMap' ? 'configmap-name' : 'secret-name'}" value="${esc(refName || '')}" style="background:var(--bg);border:1px solid var(--border2);border-radius:5px;color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;outline:none;${source === 'value' ? 'display:none;' : ''}" />
+    <input type="text" data-env-field="refKey" placeholder="key" value="${esc(refKey || '')}" style="background:var(--bg);border:1px solid var(--border2);border-radius:5px;color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;outline:none;${source === 'value' ? 'display:none;' : ''}" />
+    <button type="button" class="btn btn-ghost btn-xs" onclick="this.parentElement.remove()" style="flex-shrink:0">✕</button>`;
+}
+
+// Toggle which field(s) are visible based on the chosen Source.
+function onEnvSourceChange(selectEl) {
+  const row    = selectEl.parentElement;
+  const source = selectEl.value;
+  const value  = row.querySelector('[data-env-field="value"]');
+  const ref    = [...row.querySelectorAll('[data-env-field="refName"], [data-env-field="refKey"]')];
+  const isValue = source === 'value';
+  if (value) value.style.display = isValue ? '' : 'none';
+  ref.forEach(el => { el.style.display = isValue ? 'none' : ''; });
+  // Update placeholder of refName when switching between Secret and ConfigMap
+  const refName = row.querySelector('[data-env-field="refName"]');
+  if (refName && !isValue) refName.placeholder = source === 'configMap' ? 'configmap-name' : 'secret-name';
+}
+
+function addEnvRow(containerId, name, source, value, refName, refKey) {
   const list = document.querySelector(`[data-envlist="${containerId}"]`);
   const row = document.createElement('div');
-  row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-bottom:6px;';
-  row.innerHTML = `<input type="text" placeholder="KEY" style="background:var(--bg);border:1px solid var(--border2);border-radius:5px;color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;outline:none;" />
-    <input type="text" placeholder="value" style="background:var(--bg);border:1px solid var(--border2);border-radius:5px;color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;outline:none;" />
-    <button class="btn btn-ghost btn-xs" onclick="this.parentElement.remove()" style="flex-shrink:0">✕</button>`;
+  row.className = 'env-row';
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 90px 1fr 1fr 1fr auto;gap:6px;margin-bottom:6px;align-items:center;';
+  row.innerHTML = envRowMarkup(name, source, value, refName, refKey);
   list.appendChild(row);
 }
 
@@ -2590,9 +2625,19 @@ function readContainerCard(id) {
   if (Object.keys(res).length) c.resources = res;
   const envVars = [];
   card.querySelectorAll(`[data-envlist="${id}"] > div`).forEach(row => {
-    const ins = row.querySelectorAll('input');
-    const k = ins[0]?.value?.trim(), v = ins[1]?.value?.trim();
-    if (k) envVars.push({ name: k, value: v || '' });
+    const f = key => row.querySelector(`[data-env-field="${key}"]`);
+    const name   = f('name')?.value?.trim();
+    if (!name) return;
+    const source = f('source')?.value || 'value';
+    if (source === 'value') {
+      envVars.push({ name, value: f('value')?.value?.trim() || '' });
+    } else {
+      const refName = f('refName')?.value?.trim();
+      const refKey  = f('refKey')?.value?.trim();
+      if (!refName || !refKey) return;
+      const refField = source === 'secret' ? 'secretKeyRef' : 'configMapKeyRef';
+      envVars.push({ name, valueFrom: { [refField]: { name: refName, key: refKey } } });
+    }
   });
   if (envVars.length) c.env = envVars;
   return c;
