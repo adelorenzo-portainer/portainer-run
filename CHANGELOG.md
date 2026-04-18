@@ -11,6 +11,16 @@ branch.
 ## [Unreleased]
 
 ### Added
+- Secret and ConfigMap references for environment variables, in both forms.
+  Each env-var row gains a Source dropdown — Value (inline, default), Secret
+  (reveals secret-name + key, serialises to `valueFrom.secretKeyRef`), or
+  ConfigMap (likewise to `valueFrom.configMapKeyRef`). Existing `valueFrom`
+  entries are detected on Edit-tab load and pre-fill the matching mode. The
+  chat assistant's deploy-config schema accepts three env shapes
+  (`{name,value}`, `{name,secretRef:{name,key}}`, `{name,configMapRef:{name,key}}`)
+  and is instructed to prefer secretRef whenever a value looks like a
+  credential. The Compose translator emits inline values but warns on
+  credential-shaped keys (`*_PASSWORD`, `*_TOKEN`, …). [`204a351`, `fc828f0`]
 - Per-namespace resource quota indicator on the Deploy form. After selecting a
   namespace, a single-line summary appears below the dropdown showing CPU,
   memory, and pod usage vs. the binding hard limit (e.g.
