@@ -1229,7 +1229,7 @@ async function populateEditTab() {
         <div class="field">
           <label>Environment variables</label>
           <div id="editEnv-${i}" style="display:flex;flex-direction:column;gap:6px;">
-            ${(ct.env || []).map((e, j) => editEnvRow(i, j, e.name, e.value || '')).join('')}
+            ${(ct.env || []).map(e => editEnvRowAny(e)).join('')}
           </div>
           <button class="add-btn" onclick="editAddEnv(${i})">+ Add variable</button>
         </div>
@@ -1259,22 +1259,30 @@ async function populateEditTab() {
   }
 }
 
-function editEnvRow(ctIdx, envIdx, key, val) {
-  return `<div class="env-entry" id="editEnvRow-${ctIdx}-${envIdx}" style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;">
-    <input type="text" value="${esc(key)}" placeholder="KEY"
-      style="background:var(--bg);border:1px solid var(--border2);border-radius:5px;color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;outline:none;" />
-    <input type="text" value="${esc(val)}" placeholder="value"
-      style="background:var(--bg);border:1px solid var(--border2);border-radius:5px;color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;outline:none;" />
-    <button class="btn btn-ghost btn-xs" onclick="this.parentElement.remove()" style="flex-shrink:0;">✕</button>
-  </div>`;
+// Edit tab uses the same row markup as the Deploy form (envRowMarkup) so the
+// Source dropdown behaves identically. The wrapping div carries the env-row
+// class so saveAllEdits can locate rows.
+function editEnvRowAny(envEntry) {
+  let source = 'value', value = '', refName = '', refKey = '';
+  if (envEntry?.valueFrom?.secretKeyRef) {
+    source = 'secret';
+    refName = envEntry.valueFrom.secretKeyRef.name || '';
+    refKey  = envEntry.valueFrom.secretKeyRef.key  || '';
+  } else if (envEntry?.valueFrom?.configMapKeyRef) {
+    source = 'configMap';
+    refName = envEntry.valueFrom.configMapKeyRef.name || '';
+    refKey  = envEntry.valueFrom.configMapKeyRef.key  || '';
+  } else {
+    value = envEntry?.value || '';
+  }
+  return `<div class="env-row env-entry" style="display:grid;grid-template-columns:1fr 90px 1fr 1fr 1fr auto;gap:6px;align-items:center;">${envRowMarkup(envEntry?.name, source, value, refName, refKey)}</div>`;
 }
 
 function editAddEnv(ctIdx) {
   const list = document.getElementById('editEnv-' + ctIdx);
-  const idx = list.children.length;
-  const row = document.createElement('div');
-  row.innerHTML = editEnvRow(ctIdx, idx, '', '');
-  list.appendChild(row.firstElementChild);
+  const wrap = document.createElement('div');
+  wrap.innerHTML = editEnvRowAny({});
+  list.appendChild(wrap.firstElementChild);
 }
 
 function editAddPortRow(port, type) {
@@ -1309,11 +1317,21 @@ async function saveAllEdits() {
       const updated = { ...ct };
       if (imgEl) updated.image = imgEl.value.trim();
       if (envList) {
-        const rows = envList.querySelectorAll('.env-entry, [id^="editEnvRow"]');
+        const rows = envList.querySelectorAll('.env-row, .env-entry');
         updated.env = [...rows].map(row => {
-          const ins = row.querySelectorAll('input');
-          return { name: ins[0]?.value?.trim(), value: ins[1]?.value?.trim() || '' };
-        }).filter(e => e.name);
+          const f = key => row.querySelector(`[data-env-field="${key}"]`);
+          const name = f('name')?.value?.trim();
+          if (!name) return null;
+          const source = f('source')?.value || 'value';
+          if (source === 'value') {
+            return { name, value: f('value')?.value?.trim() || '' };
+          }
+          const refName = f('refName')?.value?.trim();
+          const refKey  = f('refKey')?.value?.trim();
+          if (!refName || !refKey) return null;
+          const refField = source === 'secret' ? 'secretKeyRef' : 'configMapKeyRef';
+          return { name, valueFrom: { [refField]: { name: refName, key: refKey } } };
+        }).filter(Boolean);
         if (!updated.env.length) delete updated.env;
       }
       return updated;
